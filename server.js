@@ -10,7 +10,25 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const app = express();
+app.set('trust proxy', 'loopback, uniquelocal');   // traefik 뒤에서 실제 접속자 IP 사용
 app.use(express.json({ limit: '5mb' }));
+
+// ── 간단 레이트 리밋 (메모리, IP별) ──
+function limiter(max, windowMs, msg) {
+  const hits = new Map();
+  setInterval(() => { const now = Date.now(); for (const [k, v] of hits) if (v.reset < now) hits.delete(k); }, windowMs).unref();
+  return (req, res, next) => {
+    const now = Date.now(), k = req.ip;
+    let h = hits.get(k);
+    if (!h || h.reset < now) { h = { n: 0, reset: now + windowMs }; hits.set(k, h); }
+    if (++h.n > max) { res.set('Retry-After', Math.ceil((h.reset - now) / 1000)); return res.status(429).json({ error: msg }); }
+    next();
+  };
+}
+const createLimit = limiter(10, 10 * 60 * 1000, '시도가 너무 많아요. 10분 뒤 다시 해주세요');
+const signLimit   = limiter(60, 10 * 60 * 1000, '요청이 너무 많아요. 잠시 뒤 다시 해주세요');
+const adminLimit  = limiter(120, 10 * 60 * 1000, '요청이 너무 많아요. 잠시 뒤 다시 해주세요');
+const safeEq = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
 // ── 저장소 (명부 1개 = JSON 파일 1개) ─────────────────────
@@ -69,9 +87,9 @@ app.get('/m/:id', page('manage.html'));
 // ── API: 공개 ────────────────────────────────────────────
 app.get('/api/config', (req, res) => res.json({ needKey: !!CREATE_KEY }));
 
-app.post('/api/rosters', (req, res) => {
+app.post('/api/rosters', createLimit, (req, res) => {
   const b = req.body || {};
-  if (CREATE_KEY && b.key !== CREATE_KEY) return res.status(403).json({ error: '생성 키가 올바르지 않습니다' });
+  if (CREATE_KEY && !safeEq(b.key || '', CREATE_KEY)) return res.status(403).json({ error: '생성 키가 올바르지 않습니다' });
   const title = clean(b.title, 80), members = parseMembers(b.members);
   if (!title) return res.status(400).json({ error: '명부 제목을 입력하세요' });
   if (!members.length) return res.status(400).json({ error: '명단을 1명 이상 입력하세요' });
@@ -87,7 +105,7 @@ app.get('/api/rosters/:id', (req, res) => {
   r ? res.json(publicView(r)) : res.status(404).json({ error: '명부를 찾을 수 없습니다' });
 });
 
-app.post('/api/rosters/:id/sign', (req, res) => {
+app.post('/api/rosters/:id/sign', signLimit, (req, res) => {
   const r = load(req.params.id);
   if (!r) return res.status(404).json({ error: '명부를 찾을 수 없습니다' });
   if (r.closed) return res.status(410).json({ error: '서명이 마감된 명부입니다' });
@@ -101,6 +119,7 @@ app.post('/api/rosters/:id/sign', (req, res) => {
 });
 
 // ── API: 관리자 (관리 링크의 토큰 필요) ─────────────────────
+app.use('/api/admin', adminLimit);
 app.get('/api/admin/:id', (req, res) => { const r = auth(req, res); if (r) res.json(adminView(r)); });
 
 app.post('/api/admin/:id/update', (req, res) => {

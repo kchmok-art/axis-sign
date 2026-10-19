@@ -23,7 +23,7 @@
     <textarea id="members" placeholder="홍길동, 기획처&#10;김철수, 교무처&#10;이영희"></textarea>
     <p class="hint">엑셀에서 [이름][소속] 두 칸을 복사해 그대로 붙여넣어도 됩니다. · 현재 <b id="cnt">0</b>명</p>
 
-    <div id="keyWrap" class="hidden"><label>생성 키 *</label><input id="key" type="password" placeholder="관리자에게 받은 생성 키"></div>
+    <div id="keyWrap" class="hidden"><label>생성 키 *</label><input id="key" type="password" placeholder="관리자에게 받은 생성 키"><label style="display:flex;gap:6px;align-items:center;font-weight:400;margin-top:8px"><input type="checkbox" id="remember" style="width:auto"> 이 기기에서 키 기억하기</label></div>
 
     <div class="btns"><button class="btn blue full" id="createBtn" onclick="create()">저장하고 링크 받기</button></div>
   </div>
@@ -63,7 +63,7 @@ function parse(){
   }).filter(m=>m.name);
 }
 $('members').addEventListener('input',()=>{$('cnt').textContent=new Set(parse().map(m=>m.name)).size});
-fetch('/api/config').then(r=>r.json()).then(c=>{if(c.needKey)$('keyWrap').classList.remove('hidden')});
+fetch('/api/config').then(r=>r.json()).then(c=>{if(c.needKey){$('keyWrap').classList.remove('hidden');const k=localStorage.getItem('axisKey');if(k){$('key').value=k;$('remember').checked=true}}});
 
 async function create(){
   const body={title:$('title').value,date:$('date').value,desc:$('desc').value,members:parse(),key:$('key').value};
@@ -73,6 +73,7 @@ async function create(){
   try{
     const r=await fetch('/api/rosters',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const d=await r.json(); if(!r.ok)throw new Error(d.error);
+    if($('remember').checked)localStorage.setItem('axisKey',body.key);else localStorage.removeItem('axisKey');
     const sign=location.origin+'/s/'+d.id, admin=location.origin+'/m/'+d.id+'?t='+d.adminToken;
     const mine=JSON.parse(localStorage.getItem('axisRosters')||'[]');
     mine.unshift({id:d.id,title:body.title.trim(),admin,createdAt:new Date().toISOString()});
