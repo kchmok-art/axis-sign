@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>명부 서명 · AX:IS</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header><div class="logo">AX:IS <span>명부 서명</span></div><span class="tag" id="status">불러오는 중</span></header>
+<main>
+  <div class="card" id="infoCard">
+    <h1 id="title">…</h1>
+    <p class="sub" id="meta"></p>
+    <div class="prog"><i id="bar" style="width:0"></i></div>
+    <p class="hint" id="progTxt"></p>
+  </div>
+
+  <div class="card" id="signCard">
+    <h2>✍️ 서명하기</h2>
+    <label>1. 내 이름 선택</label>
+    <select id="who"><option value="">— 이름을 선택하세요 —</option></select>
+    <label>2. 아래 칸에 서명</label>
+    <div class="canvas-wrap"><canvas id="pad"></canvas><div class="canvas-hint" id="padHint">여기에 손가락이나 마우스로 서명하세요</div></div>
+    <div class="btns">
+      <button class="btn ghost" onclick="clearPad()">다시 쓰기</button>
+      <button class="btn blue" style="flex:1" id="submitBtn" onclick="submitSign()">서명 제출</button>
+    </div>
+  </div>
+
+  <div class="card hidden" id="thanksCard"><div class="center"><div class="big">✅</div><h1>서명 완료</h1><p class="sub" id="thanksTxt"></p></div></div>
+  <div class="card hidden" id="errCard"><div class="center"><div class="big" id="errIcon">⚠️</div><h1 id="errTitle"></h1><p class="sub" id="errTxt"></p></div></div>
+
+  <div class="card" id="listCard"><h2>서명 현황</h2><div class="names" id="names"></div></div>
+</main>
+<div class="toast" id="toast"></div>
+<script>
+const $=id=>document.getElementById(id), ID=location.pathname.split('/').pop();
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2400)}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+let R=null;
+
+async function load(first){
+  const r=await fetch('/api/rosters/'+ID);
+  if(!r.ok){return fail('🔍','명부를 찾을 수 없어요','링크가 정확한지 확인해 주세요.')}
+  R=await r.json();
+  document.title=R.title+' · 서명';
+  $('title').textContent=R.title;
+  $('meta').textContent=[R.date,R.desc].filter(Boolean).join(' · ');
+  const done=R.members.filter(m=>m.signed).length, total=R.members.length;
+  $('bar').style.width=(done/total*100)+'%'; $('progTxt').textContent=`${done} / ${total}명 서명 완료`;
+  $('status').textContent=R.closed?'마감':'서명 중'; $('status').className='tag '+(R.closed?'closed':'ok');
+  $('names').innerHTML=R.members.map(m=>`<span class="${m.signed?'ok':''}">${m.signed?'✓ ':''}${esc(m.name)}</span>`).join('');
+  const cur=$('who').value;
+  $('who').innerHTML='<option value="">— 이름을 선택하세요 —</option>'+R.members.map(m=>`<option value="${esc(m.name)}" ${m.signed?'disabled':''}>${esc(m.name)}${m.org?' ('+esc(m.org)+')':''}${m.signed?' — 서명 완료':''}</option>`).join('');
+  if(cur&&!R.members.find(m=>m.name===cur)?.signed)$('who').value=cur;
+  if(R.closed&&$('thanksCard').classList.contains('hidden')) fail('🔒','서명이 마감되었어요','관리자에게 문의해 주세요.',true);
+}
+function fail(icon,t,txt,keepList){
+  $('signCard').classList.add('hidden'); $('errCard').classList.remove('hidden');
+  $('errIcon').textContent=icon; $('errTitle').textContent=t; $('errTxt').textContent=txt;
+  if(!keepList){$('infoCard').classList.add('hidden');$('listCard').classList.add('hidden')}
+}
+
+// ── 서명 패드 (고해상도 + 터치) ──
+const pad=$('pad'), ctx=pad.getContext('2d'); let drawing=false, dirty=false, last=null;
+function sizePad(){const d=window.devicePixelRatio||1,w=pad.clientWidth,h=pad.clientHeight;pad.width=w*d;pad.height=h*d;ctx.setTransform(d,0,0,d,0,0);ctx.lineWidth=2.6;ctx.lineCap='round';ctx.lineJoin='round';ctx.strokeStyle='#111';dirty=false;$('padHint').style.display=''}
+function pos(e){const b=pad.getBoundingClientRect(),p=e.touches?e.touches[0]:e;return{x:p.clientX-b.left,y:p.clientY-b.top}}
+function start(e){e.preventDefault();drawing=true;last=pos(e);ctx.beginPath();ctx.arc(last.x,last.y,1.2,0,7);ctx.fillStyle='#111';ctx.fill();mark()}
+function move(e){if(!drawing)return;e.preventDefault();const p=pos(e);ctx.beginPath();ctx.moveTo(last.x,last.y);ctx.lineTo(p.x,p.y);ctx.stroke();last=p;mark()}
+function end(){drawing=false}
+function mark(){if(!dirty){dirty=true;$('padHint').style.display='none'}}
+pad.addEventListener('mousedown',start);pad.addEventListener('mousemove',move);addEventListener('mouseup',end);
+pad.addEventListener('touchstart',start,{passive:false});pad.addEventListener('touchmove',move,{passive:false});pad.addEventListener('touchend',end);
+function clearPad(){sizePad()}
+addEventListener('resize',()=>{if(!dirty)sizePad()});
+sizePad();
+
+function trimmed(){
+  // 여백을 잘라 작은 PNG로 (최대 600px 폭)
+  const d=ctx.getImageData(0,0,pad.width,pad.height).data;let x0=pad.width,y0=pad.height,x1=0,y1=0;
+  for(let y=0;y<pad.height;y+=2)for(let x=0;x<pad.width;x+=2)if(d[(y*pad.width+x)*4+3]>0){if(x<x0)x0=x;if(y<y0)y0=y;if(x>x1)x1=x;if(y>y1)y1=y}
+  const m=12;x0=Math.max(0,x0-m);y0=Math.max(0,y0-m);x1=Math.min(pad.width,x1+m);y1=Math.min(pad.height,y1+m);
+  const w=x1-x0,h=y1-y0,s=Math.min(1,600/w),c=document.createElement('canvas');c.width=Math.round(w*s);c.height=Math.round(h*s);
+  c.getContext('2d').drawImage(pad,x0,y0,w,h,0,0,c.width,c.height);return c.toDataURL('image/png');
+}
+async function submitSign(){
+  const name=$('who').value;
+  if(!name)return toast('이름을 먼저 선택하세요');
+  if(!dirty)return toast('서명을 해주세요');
+  if(!confirm(`${name} 님으로 서명을 제출할까요?\n제출 후에는 수정할 수 없어요.`))return;
+  $('submitBtn').disabled=true;
+  try{
+    const r=await fetch(`/api/rosters/${ID}/sign`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,signature:trimmed()})});
+    const d=await r.json(); if(!r.ok)throw new Error(d.error);
+    $('signCard').classList.add('hidden'); $('thanksCard').classList.remove('hidden');
+    $('thanksTxt').textContent=`${name} 님, 서명이 저장되었어요. 창을 닫으셔도 됩니다.`;
+    load();
+  }catch(e){toast(e.message);load()}finally{$('submitBtn').disabled=false}
+}
+load(true); setInterval(()=>{if(document.visibilityState==='visible')load()},10000);
+</script>
+</body>
+</html>

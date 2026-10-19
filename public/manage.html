@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>명부 관리 · AX:IS</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header><div class="logo">AX:IS <span>명부 관리</span></div><a class="btn ghost sm" href="/">+ 새 명부</a></header>
+<main>
+  <div class="card no-print">
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
+      <div><h1 id="title">…</h1><p class="sub" id="meta"></p></div>
+      <span class="tag" id="status"></span>
+    </div>
+    <div class="prog"><i id="bar"></i></div><p class="hint" id="progTxt"></p>
+
+    <label>서명 링크 (참석자 공유용)</label>
+    <div class="link-box"><code id="signUrl"></code><button class="btn sm" onclick="copy()">복사</button></div>
+
+    <div class="btns">
+      <button class="btn green" onclick="download()">⬇ 서명 완료본 다운로드</button>
+      <button class="btn ghost" onclick="print()">🖨 인쇄 / PDF 저장</button>
+      <button class="btn ghost" id="closeBtn" onclick="toggleClose()"></button>
+      <button class="btn ghost" onclick="openEdit()">✏️ 명단 수정</button>
+    </div>
+  </div>
+
+  <div class="card hidden no-print" id="editCard">
+    <h2>명부 정보 · 명단 수정</h2>
+    <label>제목</label><input id="eTitle" maxlength="80">
+    <div class="row"><div><label>일시</label><input id="eDate" maxlength="40"></div><div><label>장소 · 비고</label><input id="eDesc" maxlength="300"></div></div>
+    <label>명단 (한 줄에 한 명, 소속은 쉼표로 구분)</label><textarea id="eMembers"></textarea>
+    <p class="hint">이미 서명한 사람의 이름을 바꾸면 서명이 연결되지 않아요. 이름은 그대로 두세요.</p>
+    <div class="btns"><button class="btn blue" onclick="saveEdit()">저장</button><button class="btn ghost" onclick="$('editCard').classList.add('hidden')">취소</button><button class="btn red" style="margin-left:auto" onclick="del()">명부 삭제</button></div>
+  </div>
+
+  <div class="card" id="sheet">
+    <div style="text-align:center;margin-bottom:14px"><h2 id="pTitle" style="font-size:20px;margin:0"></h2><p class="sub" id="pMeta"></p></div>
+    <table><thead><tr><th style="width:44px">연번</th><th>성명</th><th>소속</th><th>서명</th><th class="no-print">서명 시각</th><th class="no-print"></th></tr></thead><tbody id="rows"></tbody></table>
+  </div>
+</main>
+<div class="toast" id="toast"></div>
+<script>
+function copyText(s){if(navigator.clipboard&&isSecureContext)return navigator.clipboard.writeText(s);return new Promise((ok,no)=>{const t=document.createElement('textarea');t.value=s;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.select();try{document.execCommand('copy')?ok():no()}catch(e){no(e)}t.remove()})}
+const $=id=>document.getElementById(id), ID=location.pathname.split('/').pop(), T=new URLSearchParams(location.search).get('t')||'';
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2200)}
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+const fmt=s=>s?new Date(s).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+let R=null;
+async function api(method,body){
+  const r=await fetch(`/api/admin/${ID}${method==='GET'?'?t='+encodeURIComponent(T):''}`,{method,headers:{'Content-Type':'application/json'},body:method==='GET'?undefined:JSON.stringify({...body,t:T})});
+  const d=await r.json(); if(!r.ok)throw new Error(d.error); return d;
+}
+function render(){
+  const done=R.members.filter(m=>m.signed).length,total=R.members.length,meta=[R.date,R.desc].filter(Boolean).join(' · ');
+  document.title=R.title+' · 관리';
+  $('title').textContent=R.title; $('meta').textContent=meta; $('pTitle').textContent=R.title; $('pMeta').textContent=meta+(meta?' · ':'')+`총 ${total}명 · 서명 ${done}명`;
+  $('bar').style.width=(done/total*100)+'%'; $('progTxt').textContent=`${done} / ${total}명 서명 완료`+(done===total?' 🎉':'');
+  $('status').textContent=R.closed?'마감됨':'서명 받는 중'; $('status').className='tag '+(R.closed?'closed':'ok');
+  $('closeBtn').textContent=R.closed?'🔓 서명 다시 열기':'🔒 서명 마감';
+  $('signUrl').textContent=location.origin+'/s/'+ID;
+  $('rows').innerHTML=R.members.map((m,i)=>`<tr><td>${i+1}</td><td><b>${esc(m.name)}</b></td><td>${esc(m.org)}</td><td class="sig">${m.signed?`<img src="${m.signature}" alt="서명">`:'<span class="hint">미서명</span>'}</td><td class="no-print hint">${fmt(m.signedAt)}</td><td class="no-print">${m.signed?`<button class="btn ghost sm" onclick="resetSig(${i})">초기화</button>`:''}</td></tr>`).join('');
+}
+async function load(){try{R=await api('GET');render()}catch(e){document.querySelector('main').innerHTML=`<div class="card center"><div class="big">🔒</div><h1>${esc(e.message)}</h1><p class="sub">관리 링크 전체(?t=… 포함)를 정확히 붙여넣었는지 확인하세요.</p></div>`}}
+function copy(){copyText($('signUrl').textContent).then(()=>toast('복사했어요'))}
+async function toggleClose(){R=await api('POST',{closed:!R.closed});render();toast(R.closed?'서명을 마감했어요':'서명을 다시 열었어요')}
+async function resetSig(i){const n=R.members[i].name;if(!confirm(`${n} 님의 서명을 지울까요? 다시 서명할 수 있게 됩니다.`))return;R=await api('POST',{resetName:n});render();toast('초기화했어요')}
+function openEdit(){$('eTitle').value=R.title;$('eDate').value=R.date;$('eDesc').value=R.desc;$('eMembers').value=R.members.map(m=>m.org?`${m.name}, ${m.org}`:m.name).join('\n');$('editCard').classList.remove('hidden');$('editCard').scrollIntoView({behavior:'smooth'})}
+async function saveEdit(){
+  const members=$('eMembers').value.split(/\r?\n/).map(l=>l.trim()).filter(Boolean).map(l=>{const p=l.split(/\t|,/).map(s=>s.trim());return{name:p[0].replace(/^\d+[.)]\s*/,''),org:p.slice(1).join(' ')}});
+  try{R=await api('POST',{title:$('eTitle').value,date:$('eDate').value,desc:$('eDesc').value,members});render();$('editCard').classList.add('hidden');toast('저장했어요')}catch(e){toast(e.message)}
+}
+async function del(){if(!confirm('명부를 삭제할까요? 서명 링크도 더 이상 열리지 않아요.'))return;await api('DELETE',{});document.querySelector('main').innerHTML='<div class="card center"><div class="big">🗑</div><h1>삭제했어요</h1><p><a class="btn" href="/">새 명부 만들기</a></p></div>'}
+function download(){
+  const rows=R.members.map((m,i)=>`<tr><td>${i+1}</td><td>${esc(m.name)}</td><td>${esc(m.org)}</td><td>${m.signed?`<img src="${m.signature}">`:''}</td><td>${fmt(m.signedAt)}</td></tr>`).join('');
+  const meta=esc([R.date,R.desc].filter(Boolean).join(' · '));
+  const html=`<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${esc(R.title)}</title><style>body{font-family:'Malgun Gothic',sans-serif;max-width:800px;margin:30px auto;padding:0 16px}h1{text-align:center;font-size:22px;margin:0}p{text-align:center;color:#555;font-size:13px}table{width:100%;border-collapse:collapse;font-size:14px}th,td{border:1px solid #999;padding:6px;text-align:center;height:46px}th{background:#f1f1f1}img{max-height:40px;max-width:130px}</style></head><body><h1>${esc(R.title)}</h1><p>${meta}${meta?' · ':''}총 ${R.members.length}명 · 서명 ${R.members.filter(m=>m.signed).length}명 · 출력 ${new Date().toLocaleString('ko-KR')}</p><table><thead><tr><th style="width:44px">연번</th><th>성명</th><th>소속</th><th>서명</th><th>서명 시각</th></tr></thead><tbody>${rows}</tbody></table></body></html>`;
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([html],{type:'text/html;charset=utf-8'}));a.download=R.title.replace(/[\\/:*?"<>|]/g,'_')+'_서명완료.html';a.click();
+}
+load(); setInterval(()=>{if(document.visibilityState==='visible'&&$('editCard').classList.contains('hidden'))load()},8000);
+</script>
+</body>
+</html>
