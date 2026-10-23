@@ -10,7 +10,17 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const app = express();
+app.disable('x-powered-by');                         // 서버 종류(Express) 노출 줄이기
 app.set('trust proxy', 'loopback, uniquelocal');   // traefik 뒤에서 실제 접속자 IP 사용
+// 기본 보안 헤더: MIME 추측 차단, 다른 사이트에 끼워넣기(클릭재킹) 차단, 관리 링크 토큰이 리퍼러로 새는 것 방지
+app.use((req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('X-Frame-Options', 'DENY');
+  res.set('Referrer-Policy', 'no-referrer');
+  res.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  if (req.secure) res.set('Strict-Transport-Security', 'max-age=15552000');
+  next();
+});
 app.use(express.json({ limit: '5mb' }));
 
 // ── 간단 레이트 리밋 (메모리, IP별) ──
@@ -144,4 +154,7 @@ app.delete('/api/admin/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(PORT, '0.0.0.0', () => console.log(`sign-hub on :${PORT}  data=${DATA_DIR}`));
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`sign-hub on :${PORT}  data=${DATA_DIR}`);
+  if (!CREATE_KEY) console.warn('⚠️  CREATE_KEY 미설정: 누구나 명부를 만들 수 있습니다. 운영 서버에서는 꼭 설정하세요.');
+});
